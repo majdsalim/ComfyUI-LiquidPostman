@@ -1,0 +1,12 @@
+[project]
+name = "comfyui-liquidpostman"
+description = "Liquid Postman (Gemini Image) — ComfyUI node for Gemini image generation"
+version = "1.0.0"
+license = "MIT"
+requires-python = ">=3.12"
+dependencies = ["requests", "Pillow"]
+
+[tool.comfy]
+PublisherId = "macsalim"
+Name = "ComfyUI-LiquidPostman"
+DisplayName = "Liquid Postman (Gemini Image)"
