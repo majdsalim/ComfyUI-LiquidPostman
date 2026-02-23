@@ -33,7 +33,7 @@ class LiquidPostmanGeminiImage:
             "required": {
                 "api_key": ("STRING", {"default": ""}),
                 "prompt": ("STRING", {"default": "", "multiline": True}),
-                "model": ("STRING", {"default": "gemini-2.0-flash-preview-image-generation"}),
+                "model": ("STRING", {"default": "gemini-3-pro-image-preview"}),
                 "seed": ("INT", {"default": 42, "min": -1, "max": 2**31 - 1}),
                 "aspect_ratio": (["1:1", "2:3", "3:2", "3:4", "4:3", "9:16", "16:9", "21:9"],),
                 "resolution": (["1K", "2K", "4K"],),
@@ -122,34 +122,30 @@ class LiquidPostmanGeminiImage:
         if prompt.strip():
             parts.append({"text": prompt})
 
-        # 2) Input images → inline base64 PNG
+        # 2) Input images → upload via Files API
         if images is not None:
             for i in range(images.shape[0]):
                 img_np = (images[i].cpu().numpy() * 255).astype(np.uint8)
                 pil_img = Image.fromarray(img_np)
                 buf = io.BytesIO()
                 pil_img.save(buf, format="PNG")
-                b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+                png_bytes = buf.getvalue()
+                if debug:
+                    print(f"[Liquid Postman] Uploading input image {i} ({pil_img.width}x{pil_img.height}, {len(png_bytes)} bytes)")
+                file_uri = self._upload_bytes(
+                    png_bytes, f"input_image_{i}.png", "image/png", api_key, debug,
+                )
                 parts.append({
-                    "inlineData": {
+                    "fileData": {
+                        "fileUri": file_uri,
                         "mimeType": "image/png",
-                        "data": b64,
                     }
                 })
-                if debug:
-                    print(f"[Liquid Postman] Attached input image {i} ({pil_img.width}x{pil_img.height})")
 
         # 3) File uploads (PDF / DOCX)
         if files_str.strip():
-            paths = re.split(r"[,\n]+", files_str.strip())
-            for raw_path in paths:
-                p = raw_path.strip()
-                if not p:
-                    continue
-                if not os.path.isfile(p):
-                    raise FileNotFoundError(
-                        f"[Liquid Postman] File not found: {p}"
-                    )
+            resolved = self._resolve_file_paths(files_str)
+            for p in resolved:
                 ext = os.path.splitext(p)[1].lower()
                 if ext == ".pdf":
                     mime = "application/pdf"
@@ -170,14 +166,54 @@ class LiquidPostmanGeminiImage:
         return parts
 
     # ------------------------------------------------------------------ #
+    #  Resolve file paths (supports folders and individual files)
+    # ------------------------------------------------------------------ #
+    def _resolve_file_paths(self, files_str):
+        """Parse the files input string. Each entry (comma or newline separated)
+        can be a file path or a folder path. Folders are scanned (top-level only)
+        for .pdf and .docx files."""
+        entries = re.split(r"[,\n]+", files_str.strip())
+        resolved = []
+        allowed_exts = {".pdf", ".docx"}
+        for raw in entries:
+            p = raw.strip()
+            if not p:
+                continue
+            if os.path.isdir(p):
+                found = sorted(
+                    os.path.join(p, f)
+                    for f in os.listdir(p)
+                    if os.path.isfile(os.path.join(p, f))
+                    and os.path.splitext(f)[1].lower() in allowed_exts
+                )
+                if not found:
+                    raise FileNotFoundError(
+                        f"[Liquid Postman] No .pdf or .docx files found in folder: {p}"
+                    )
+                resolved.extend(found)
+            elif os.path.isfile(p):
+                resolved.append(p)
+            else:
+                raise FileNotFoundError(
+                    f"[Liquid Postman] File or folder not found: {p}"
+                )
+        return resolved
+
+    # ------------------------------------------------------------------ #
     #  Gemini Files API upload
     # ------------------------------------------------------------------ #
     def _upload_file(self, filepath, mime_type, api_key, debug):
+        """Upload a file from disk via the Gemini Files API."""
         filename = os.path.basename(filepath)
-        file_size = os.path.getsize(filepath)
-
+        with open(filepath, "rb") as f:
+            file_bytes = f.read()
         if debug:
-            print(f"[Liquid Postman] Uploading {filename} ({file_size} bytes, {mime_type})")
+            print(f"[Liquid Postman] Uploading {filename} ({len(file_bytes)} bytes, {mime_type})")
+        return self._upload_bytes(file_bytes, filename, mime_type, api_key, debug)
+
+    def _upload_bytes(self, data, display_name, mime_type, api_key, debug):
+        """Upload raw bytes via the Gemini Files API (resumable)."""
+        file_size = len(data)
 
         # Step 1: Initiate resumable upload
         init_url = f"{GEMINI_API_BASE}/upload/v1beta/files"
@@ -189,7 +225,7 @@ class LiquidPostmanGeminiImage:
             "X-Goog-Upload-Header-Content-Type": mime_type,
             "Content-Type": "application/json",
         }
-        init_body = {"file": {"display_name": filename}}
+        init_body = {"file": {"display_name": display_name}}
         init_resp = requests.post(init_url, headers=init_headers, json=init_body, timeout=60)
         if init_resp.status_code != 200:
             raise RuntimeError(
@@ -201,16 +237,13 @@ class LiquidPostmanGeminiImage:
             raise RuntimeError("[Liquid Postman] File upload init did not return an upload URL.")
 
         # Step 2: Upload the bytes
-        with open(filepath, "rb") as f:
-            file_bytes = f.read()
-
         upload_headers = {
             "x-goog-api-key": api_key,
             "X-Goog-Upload-Offset": "0",
             "X-Goog-Upload-Command": "upload, finalize",
             "Content-Length": str(file_size),
         }
-        upload_resp = requests.post(upload_url, headers=upload_headers, data=file_bytes, timeout=120)
+        upload_resp = requests.post(upload_url, headers=upload_headers, data=data, timeout=120)
         if upload_resp.status_code != 200:
             raise RuntimeError(
                 f"[Liquid Postman] File upload failed ({upload_resp.status_code}): {upload_resp.text[:300]}"
@@ -222,7 +255,7 @@ class LiquidPostmanGeminiImage:
             raise RuntimeError("[Liquid Postman] File upload succeeded but no URI returned.")
 
         if debug:
-            print(f"[Liquid Postman] Uploaded {filename} → {file_uri}")
+            print(f"[Liquid Postman] Uploaded {display_name} → {file_uri}")
 
         return file_uri
 
