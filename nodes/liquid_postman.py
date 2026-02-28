@@ -33,7 +33,7 @@ class LiquidPostmanGeminiImage:
             "required": {
                 "api_key": ("STRING", {"default": ""}),
                 "prompt": ("STRING", {"default": "", "multiline": True}),
-                "model": ("STRING", {"default": "gemini-3-pro-image-preview"}),
+                "model": ("STRING", {"default": "gemini-3.1-flash-image-preview"}),
                 "seed": ("INT", {"default": 42, "min": -1, "max": 2**31 - 1}),
                 "aspect_ratio": (["1:1", "2:3", "3:2", "3:4", "4:3", "9:16", "16:9", "21:9"],),
                 "resolution": (["1K", "2K", "4K"],),

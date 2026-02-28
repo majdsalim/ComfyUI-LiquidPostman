@@ -32,7 +32,7 @@ pip install requests Pillow
 |---|---|---|---|
 | `api_key` | STRING | `""` | Your Gemini API key (required) |
 | `prompt` | STRING | `""` | Text prompt for image generation |
-| `model` | STRING | `gemini-3-pro-image-preview` | Gemini model to use |
+| `model` | STRING | `gemini-3.1-flash-image-preview` | Gemini model to use |
 | `seed` | INT | `42` | Random seed (-1 to disable) |
 | `aspect_ratio` | ENUM | `1:1` | Output aspect ratio (1:1, 2:3, 3:2, 3:4, 4:3, 9:16, 16:9, 21:9) |
 | `resolution` | ENUM | `1K` | Output resolution (1K, 2K, 4K) |
